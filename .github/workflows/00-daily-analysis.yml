@@ -1,5 +1,4 @@
 name: 每日股票分析
-
 on:
   schedule:
     - cron: '0 10 * * 1-5'
@@ -29,10 +28,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 设置 Python 环境
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -50,168 +49,13 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           STOCK_LIST_CONFIG: ${{ vars.STOCK_LIST || secrets.STOCK_LIST }}
-          SINGLE_STOCK_NOTIFY: 'false'
+          SINGLE_STOCK_NOTIFY: 'false'  # 關鍵：關閉單股獨立推送
         run: |
           if [ -n "${STOCK_LIST_CONFIG:-}" ]; then
             export STOCK_LIST="$STOCK_LIST_CONFIG"
           elif [ -z "${STOCK_LIST:-}" ]; then
-            export STOCK_LIST="600519.SS,000858.SZ,2330.TW"
+            export STOCK_LIST="600519,000858,300750" # 預設測試股票
           fi
           
           python main.py
-          import os
-import sys
-import datetime
-import requests
-import yfinance as yf
-import google.generativeai as genai
 
-# ==========================================
-# 1. 環境變數與配置讀取
-# ==========================================
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-STOCK_LIST_RAW = os.getenv("STOCK_LIST", "600519.SS,000858.SZ,2330.TW")
-
-# 解析股票清單 (支援逗號或空格分隔)
-STOCK_LIST = [s.strip() for s in STOCK_LIST_RAW.replace("\n", ",").split(",") if s.strip()]
-
-# 配置 Gemini AI
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-else:
-    print("⚠️ 警告：未檢測到 GEMINI_API_KEY，AI 分析功能將跳過。")
-
-# ==========================================
-# 2. 資料抓取模組 (yfinance)
-# ==========================================
-def fetch_stock_data(ticker_symbol):
-    """抓取單檔股票的近期行情與基本面"""
-    try:
-        stock = yf.Ticker(ticker_symbol)
-        hist = stock.history(period="5d")
-        if hist.empty:
-            return None
-        
-        latest = hist.iloc[-1]
-        prev = hist.iloc[-2] if len(hist) > 1 else latest
-        change_pct = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
-        
-        return {
-            "symbol": ticker_symbol,
-            "price": round(latest['Close'], 2),
-            "change_pct": round(change_pct, 2),
-            "volume": int(latest['Volume']),
-            "high": round(latest['High'], 2),
-            "low": round(latest['Low'], 2)
-        }
-    except Exception as e:
-        print(f"❌ 抓取 {ticker_symbol} 資料失敗: {e}")
-        return None
-
-# ==========================================
-# 3. AI 整合分析模組 (Single-Prompt Aggregator)
-# ==========================================
-def generate_unified_report(stocks_data):
-    """將所有股票數據打包送給 AI，一次性生成無重複標題的整合報告"""
-    if not GEMINI_API_KEY or not stocks_data:
-        # fallback: 簡易文字報告
-        lines = ["# 📊 每日自選股行情簡報", f"**日期**：{datetime.date.today()}\n"]
-        for s in stocks_data:
-            lines.append(f"### • {s['symbol']}: ${s['price']} ({s['change_pct']}%) | 幅度: {s['low']}~{s['high']}")
-        return "\n".join(lines)
-
-    prompt = f"""
-你是一位專業的股票數據分析師。以下是今天使用者自選股的最新市場數據：
-{stocks_data}
-
-請幫我生成一份**精簡且統整在同一頁的每日投資分析報告**。
-
-【排版與格式嚴格要求】：
-1. 全文**只能有一個大標題**（# 🚀 每日自選股智能分析總覽）。
-2. **絕對不要**為每檔股票重複生成「前言」、「免責聲明」、「日期」或「結語」。
-3. 每一檔股票統一使用 **H3 (###)** 標題，格式為：`### 📌 [股票代碼] 核心分析`。
-4. 每檔股票的分析內容必須包含：
-   - 走勢短評（結合今日漲跌幅與波動度）
-   - 關鍵支撐/壓力位提示
-   - 簡短操作建議（觀望/分批/留意風險）
-5. 全文最後**只能在最底部放一次**統一的免責聲明。
-
-請使用繁體中文回答，語氣專業、簡潔。
-"""
-
-    try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        print(f"❌ AI 生成報告失敗: {e}")
-        # 備用純文字格式
-        lines = ["# 📊 每日自選股行情簡報", f"**日期**：{datetime.date.today()}\n"]
-        for s in stocks_data:
-            lines.append(f"### • {s['symbol']}: ${s['price']} ({s['change_pct']}%)")
-        return "\n".join(lines)
-
-# ==========================================
-# 4. 通知推送模組 (Discord Webhook)
-# ==========================================
-def send_discord_notification(report_text):
-    """將整合後的報告一次性發送到 Discord"""
-    if not DISCORD_WEBHOOK_URL:
-        print("ℹ️ 未設定 DISCORD_WEBHOOK_URL，跳過推送。")
-        return
-
-    # Discord 訊息單次上限為 2000 字，長報告需切片傳送
-    chunk_size = 1900
-    chunks = [report_text[i:i+chunk_size] for i in range(0, len(report_text), chunk_size)]
-
-    for chunk in chunks:
-        payload = {"content": chunk}
-        res = requests.post(DISCORD_WEBHOOK_URL, json=payload)
-        if res.status_code in [200, 204]:
-            print("✅ 成功推送報告區塊至 Discord！")
-        else:
-            print(f"❌ Discord 推送失敗 ({res.status_code}): {res.text}")
-
-# ==========================================
-# 5. 主程式入口
-# ==========================================
-def main():
-    print("==========================================")
-    print("🚀 開始執行每日股票整合分析流程")
-    print(f"⏰ 時間: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"📊 待分析股票: {STOCK_LIST}")
-    print("==========================================")
-
-    # 1. 抓取所有股票數據
-    all_stocks_data = []
-    for symbol in STOCK_LIST:
-        data = fetch_stock_data(symbol)
-        if data:
-            all_stocks_data.append(data)
-
-    if not all_stocks_data:
-        print("❌ 未取得任何有效的股票數據，程序終止。")
-        sys.exit(1)
-
-    # 2. 一次性生成整合報告
-    print("🤖 正在調用 AI 生成統整報告...")
-    unified_report = generate_unified_report(all_stocks_data)
-
-    # 儲存報告至檔案系統
-    os.makedirs("reports", exist_ok=True)
-    report_filename = f"reports/stock_summary_{datetime.date.today()}.md"
-    with open(report_filename, "w", encoding="utf-8") as f:
-        f.write(unified_report)
-    print(f"📁 報告已成功儲存至: {report_filename}")
-
-    # 3. 發送一次性通知
-    print("📡 正在發送單一整合通知...")
-    send_discord_notification(unified_report)
-
-    print("==========================================")
-    print("🎉 分析與推送流程順利完成！")
-    print("==========================================")
-
-if __name__ == "__main__":
-    main()
