@@ -1,4 +1,5 @@
 name: 每日股票分析
+
 on:
   schedule:
     - cron: '0 10 * * 1-5'
@@ -28,10 +29,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: 设置 Python 环境
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -49,15 +50,15 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           STOCK_LIST_CONFIG: ${{ vars.STOCK_LIST || secrets.STOCK_LIST }}
-          SINGLE_STOCK_NOTIFY: 'false'  # 關鍵：關閉單股獨立推送
+          SINGLE_STOCK_NOTIFY: 'false'
         run: |
           if [ -n "${STOCK_LIST_CONFIG:-}" ]; then
             export STOCK_LIST="$STOCK_LIST_CONFIG"
           elif [ -z "${STOCK_LIST:-}" ]; then
-            export STOCK_LIST="600519,000858,300750" # 預設測試股票
+            export STOCK_LIST="600519.SS,000858.SZ,2330.TW"
           fi
           
-          python main.py 
+          python main.py
           import os
 import sys
 import datetime
